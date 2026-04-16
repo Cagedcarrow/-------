@@ -1,4 +1,4 @@
-function baseHandles = BaseControl(updateCallback)
+function baseHandles = BaseControl(updateCallback, initVals, limits)
     % BASECONTROL 创建独立的机器人基座姿态控制窗口
     % 输入: updateCallback - 当滑块变动时，主程序执行的刷新函数句柄
 
@@ -9,8 +9,22 @@ function baseHandles = BaseControl(updateCallback)
     % 2. 定义标签和范围
     labels = {'Base X (world,m)', 'Base Y (world,m)', 'Base Z (world,m)', ...
               'Base Roll (deg)', 'Base Pitch (deg)', 'Base Yaw (deg)'};
-    limits = [-2 2; -2 2; 0 1; -180 180; -180 180; -180 180];
-    initVals = [0 0 0 0 0 0];
+
+    if nargin < 2 || isempty(initVals)
+        initVals = [0 0 0 0 0 0];
+    end
+    if nargin < 3 || isempty(limits)
+        limits = [-2 2; -2 2; 0 1; -180 180; -180 180; -180 180];
+    end
+
+    if numel(initVals) ~= 6
+        error('BaseControl: initVals 必须是 1x6 向量。');
+    end
+    initVals = reshape(initVals, 1, 6);
+
+    if ~isequal(size(limits), [6 2])
+        error('BaseControl: limits 必须是 6x2 矩阵。');
+    end
 
     baseHandles.sliders = cell(1, 6);
     baseHandles.txtVals = cell(1, 6);
