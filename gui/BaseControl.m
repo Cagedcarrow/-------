@@ -30,6 +30,7 @@ function baseHandles = BaseControl(updateCallback)
         baseHandles.sliders{i} = uicontrol('Parent', baseHandles.fig, 'Style', 'slider', ...
             'Position', [20 y_pos 310 30], 'Min', limits(i,1), 'Max', limits(i,2), ...
             'Value', initVals(i), 'Callback', updateCallback);
-        guidata(baseHandles.fig, baseHandles);
     end
+
+    guidata(baseHandles.fig, baseHandles);
 end

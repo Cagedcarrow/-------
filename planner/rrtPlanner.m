@@ -49,6 +49,10 @@ function [pathPoints, planInfo] = rrtPlanner(startPos, endPos, robot, ik, weight
 
     % -------------------- main loop --------------------
     for iter = 1:p.maxIter
+        if mod(iter, 250) == 1
+            fprintf('--> [DP-RRT] 迭代中: %d/%d, 当前树节点=%d\n', iter, p.maxIter, size(treeXYZ, 1));
+        end
+
         PgCurrent  = p.PgInit * exp(-p.failDecay * failCount);
         rhoCurrent = p.rhoInit * exp(-p.failDecay * failCount);
 
@@ -249,8 +253,8 @@ function [isValid, cfgOut] = isNodeAndEdgeValid( ...
             return;
         end
 
-        % 只检查“铲子 vs 本体关键连杆”，避免全身保守碰撞体过度拦截
-        isSelfColliding = isShovelBodyCollision(robot, cfgCandidate);
+        % 检查当前候选点以及从 nearCfg 到 cfgCandidate 的关节运动过程
+        isSelfColliding = isShovelBodyMotionCollision(robot, qCfg(nearIdx,:), cfgCandidate);
 
         if isSelfColliding
             isValid = false;
@@ -342,6 +346,22 @@ function tf = isShovelBodyCollision(robot, config)
 
         if isCollisionEntry(details(shovelIdx, bodyIdx)) || ...
            isCollisionEntry(details(bodyIdx, shovelIdx))
+            tf = true;
+            return;
+        end
+    end
+end
+
+function tf = isShovelBodyMotionCollision(robot, configA, configB)
+    tf = false;
+    delta = configB - configA;
+    maxJointStep = deg2rad(2.0);
+    numSamples = max(2, ceil(max(abs(delta)) / maxJointStep) + 1);
+
+    for k = 1:numSamples
+        alpha = (k - 1) / max(numSamples - 1, 1);
+        cfg = configA + alpha * delta;
+        if isShovelBodyCollision(robot, cfg)
             tf = true;
             return;
         end

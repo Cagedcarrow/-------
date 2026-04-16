@@ -34,7 +34,7 @@ title(handles.ax, 'UR10 机械臂本体研究（世界基座控制）');
 
 % 4) 启动基座控制窗口
 mainFigHandle = handles.fig;
-baseH = BaseControl(@(src, event) updateBasePose(mainFigHandle));
+baseH = BaseControl(@(src, event) updateBasePose(mainFigHandle, src));
 handles.baseH = baseH;
 guidata(handles.fig, handles);
 
@@ -93,6 +93,7 @@ function startSimulation(figHandle)
     plannerParams.targetOrientation = sharedOrientation;
 
     fprintf('6. 调用 DP-RRT 规划（仅本体约束）...\n');
+    fprintf('   规划中，请等待...\n');
     [pathPoints, planInfo] = rrtPlanner( ...
         startPos, endPos, h.robot, h.ik, weights, currentConfig, [], plannerParams);
 
@@ -167,13 +168,14 @@ function startSimulation(figHandle)
             fprintf('点 %d IK误差: %.4f m\n', i, bestError);
         end
 
-        [shovelHitBody, hitInfo] = checkShovelBodyCollision(h.robot, newConfig, h.basePoseWorld);
+        [shovelHitBody, hitInfo] = checkMotionCollision(h.robot, currentConfig, newConfig, h.basePoseWorld);
         if shovelHitBody
             hasCollision = true;
             title(h.ax, '检测到铲子与本体碰撞，已停止', 'Color', 'r');
             plot3(h.ax, actualXYZ(1), actualXYZ(2), actualXYZ(3), 'rx', ...
                 'MarkerSize', 12, 'LineWidth', 2);
-            fprintf('碰撞点 %d: %s vs %s\n', i, hitInfo.body_a, hitInfo.body_b);
+            fprintf('碰撞点 %d: %s vs %s, 检测方式=%s, 最小距离=%.4f m, 插值步=%d\n', ...
+                i, hitInfo.body_a, hitInfo.body_b, hitInfo.method, hitInfo.min_distance, hitInfo.sample_index);
             break;
         end
 
@@ -254,6 +256,39 @@ function [isColliding, info] = checkShovelBodyCollision(robot, config, basePoseW
         info.min_distance = proximityInfo.min_distance;
         info.body_b = proximityInfo.body_b;
         info.method = 'proximity_warning';
+    end
+end
+
+function [isColliding, info] = checkMotionCollision(robot, configA, configB, basePoseWorld)
+    info = struct('body_a', '铲子', 'body_b', '', 'method', 'none', ...
+        'min_distance', inf, 'sample_index', 0);
+    isColliding = false;
+
+    delta = configB - configA;
+    maxJointStep = deg2rad(2.0);
+    numSamples = max(2, ceil(max(abs(delta)) / maxJointStep) + 1);
+
+    for k = 1:numSamples
+        alpha = (k - 1) / max(numSamples - 1, 1);
+        cfg = configA + alpha * delta;
+        [hitNow, hitInfo] = checkShovelBodyCollision(robot, cfg, basePoseWorld);
+
+        if hitInfo.min_distance < info.min_distance
+            info = hitInfo;
+            info.sample_index = k;
+        end
+
+        if hitNow
+            isColliding = true;
+            info = hitInfo;
+            info.sample_index = k;
+            if isempty(info.method) || strcmp(info.method, 'none')
+                info.method = 'swept_checkCollision';
+            else
+                info.method = ['swept_' info.method];
+            end
+            return;
+        end
     end
 end
 
@@ -358,13 +393,29 @@ end
 %% =========================================================================
 % 基座控制回调（世界坐标）
 % =========================================================================
-function updateBasePose(mainFig)
+function updateBasePose(mainFig, src)
     if ~ishandle(mainFig)
         return;
     end
     h = guidata(mainFig);
-    hb = guidata(gcf);
+    baseFig = [];
+    if nargin >= 2 && ~isempty(src) && ishandle(src)
+        baseFig = ancestor(src, 'figure');
+    end
+    if isempty(baseFig) || ~ishandle(baseFig)
+        if isfield(h, 'baseH') && isfield(h.baseH, 'fig') && ishandle(h.baseH.fig)
+            baseFig = h.baseH.fig;
+        else
+            baseFig = gcf;
+        end
+    end
+    hb = guidata(baseFig);
     if isempty(h) || isempty(hb)
+        warning('[BaseControl] 未能读取基座控制窗口的 guidata。');
+        return;
+    end
+    if ~isfield(hb, 'sliders') || numel(hb.sliders) < 6
+        warning('[BaseControl] 控制窗口数据不完整，缺少 sliders 字段。');
         return;
     end
 
