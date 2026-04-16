@@ -1,0 +1,125 @@
+{
+  "models": [
+    {
+      "title": "DeepSeek V3",
+      "model": "deepseek-chat",
+      "contextLength": 128000,
+      "apiKey": "sk-d2a3f732d6f748289f84adf3ce875715",
+      "provider": "deepseek",
+      "apiBase": "https://api.deepseek.com",
+      "requestOptions": {
+        "timeout": 300000,
+        "maxTokens": 8192,
+        "temperature": 0.7,
+        "topP": 0.95,
+        "frequencyPenalty": 0,
+        "presencePenalty": 0
+      },
+      "completionOptions": {
+        "maxTokens": 8192
+      }
+    },
+    {
+      "title": "DeepSeek R1 (推理模型)",
+      "model": "deepseek-reasoner",
+      "contextLength": 64000,
+      "apiKey": "sk-d2a3f732d6f748289f84adf3ce875715",
+      "provider": "deepseek",
+      "apiBase": "https://api.deepseek.com",
+      "requestOptions": {
+        "timeout": 300000,
+        "maxTokens": 8192,
+        "temperature": 0.7,
+        "topP": 0.95,
+        "frequencyPenalty": 0,
+        "presencePenalty": 0
+      },
+      "completionOptions": {
+        "maxTokens": 8192
+      }
+    },
+    {
+      "title": "DeepSeek Coder",
+      "model": "deepseek-coder",
+      "contextLength": 128000,
+      "apiKey": "sk-d2a3f732d6f748289f84adf3ce875715",
+      "provider": "deepseek",
+      "apiBase": "https://api.deepseek.com",
+      "requestOptions": {
+        "timeout": 300000,
+        "maxTokens": 8192,
+        "temperature": 0.7,
+        "topP": 0.95,
+        "frequencyPenalty": 0,
+        "presencePenalty": 0
+      },
+      "completionOptions": {
+        "maxTokens": 8192
+      }
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "DeepSeek Coder Autocomplete",
+    "model": "deepseek-chat",
+    "apiKey": "sk-d2a3f732d6f748289f84adf3ce875715",
+    "provider": "deepseek",
+    "apiBase": "https://api.deepseek.com",
+    "requestOptions": {
+      "timeout": 30000,
+      "maxTokens": 4096
+    }
+  },
+  "contextProviders": [
+    {
+      "name": "code",
+      "params": {}
+    },
+    {
+      "name": "docs",
+      "params": {}
+    },
+    {
+      "name": "diff",
+      "params": {}
+    },
+    {
+      "name": "terminal",
+      "params": {}
+    },
+    {
+      "name": "problems",
+      "params": {}
+    },
+    {
+      "name": "folder",
+      "params": {}
+    },
+    {
+      "name": "codebase",
+      "params": {
+        "maxTokens": 12000,
+        "maxChunks": 100
+      }
+    }
+  ],
+  "slashCommands": [
+    {
+      "name": "share",
+      "description": "Export the current chat session to markdown"
+    },
+    {
+      "name": "cmd",
+      "description": "Generate a shell command"
+    },
+    {
+      "name": "commit",
+      "description": "Generate a git commit message"
+    }
+  ],
+  "experimental": {
+    "quickActions": true,
+    "contextMenu": true
+  },
+  "disableSessionTitles": false,
+  "data": []
+}
