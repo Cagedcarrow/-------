@@ -1,5 +1,7 @@
 function [pathPoints, planInfo] = rrtPlanner(startPos, endPos, robot, ik, weights, currentConfig, varargin)
 %RRTPLANNER DP-RRT (3D) with STL point-cloud obstacle avoidance.
+% Coordinate convention:
+%   startPos/endPos/obstaclePoints are all in WORLD coordinates.
 % Backward compatible:
 %   pathPoints = rrtPlanner(startPos, endPos, robot, ik, weights, currentConfig)
 % New usage:
@@ -9,12 +11,18 @@ function [pathPoints, planInfo] = rrtPlanner(startPos, endPos, robot, ik, weight
     % -------------------- input --------------------
     startPos = reshape(startPos, 1, 3);
     endPos = reshape(endPos, 1, 3);
+    assert(numel(startPos) == 3 && numel(endPos) == 3, ...
+        'rrtPlanner: startPos/endPos must be 1x3 world coordinates.');
 
     obstaclePoints = [];
     userParams = struct();
 
     if ~isempty(varargin)
         obstaclePoints = varargin{1};
+        if ~isempty(obstaclePoints)
+            assert(size(obstaclePoints,2) == 3, ...
+                'rrtPlanner: obstaclePoints must be Nx3 world coordinates.');
+        end
     end
     if numel(varargin) >= 2
         userParams = varargin{2};
@@ -241,13 +249,8 @@ function [isValid, cfgOut] = isNodeAndEdgeValid( ...
             return;
         end
 
-        % 优先用项目里的 collisionChecker；不存在则回落到 checkCollision
-        if exist('collisionChecker', 'file') == 2
-            isSelfColliding = collisionChecker(robot, cfgCandidate);
-        else
-            isSelfColliding = checkCollision(robot, cfgCandidate, ...
-                'Exhaustive', 'off', 'SkippedSelfCollisions', 'parent');
-        end
+        % 只检查“铲子 vs 本体关键连杆”，避免全身保守碰撞体过度拦截
+        isSelfColliding = isShovelBodyCollision(robot, cfgCandidate);
 
         if isSelfColliding
             isValid = false;
@@ -310,5 +313,63 @@ function L = pathLength(path)
         L = 0;
     else
         L = sum(vecnorm(diff(path,1,1), 2, 2));
+    end
+end
+
+function tf = isShovelBodyCollision(robot, config)
+    tf = false;
+
+    [robotCollision, details] = checkCollision(robot, config, ...
+        'Exhaustive', 'on', 'SkippedSelfCollisions', 'parent');
+    if ~robotCollision
+        return;
+    end
+
+    bodyLabels = getCollisionBodyLabels(robot, details);
+    shovelIdx = find(bodyLabels == "铲子", 1);
+    if isempty(shovelIdx)
+        return;
+    end
+
+    monitoredBodies = ["ur10", "ur10_shoulder", "ur10_upper_arm", ...
+        "ur10_forearm", "ur10_wrist_1", "ur10_wrist_2"];
+
+    for i = 1:numel(monitoredBodies)
+        bodyIdx = find(bodyLabels == monitoredBodies(i), 1);
+        if isempty(bodyIdx)
+            continue;
+        end
+
+        if isCollisionEntry(details(shovelIdx, bodyIdx)) || ...
+           isCollisionEntry(details(bodyIdx, shovelIdx))
+            tf = true;
+            return;
+        end
+    end
+end
+
+function bodyLabels = getCollisionBodyLabels(robot, details)
+    baseLabel = "base";
+    if isprop(robot, 'BaseName') && ~isempty(robot.BaseName)
+        baseLabel = string(robot.BaseName);
+    end
+
+    bodyLabels = [baseLabel, string(robot.BodyNames)];
+    if nargin >= 2 && size(details, 1) ~= numel(bodyLabels)
+        bodyLabels = string(robot.BodyNames);
+    end
+end
+
+function tf = isCollisionEntry(value)
+    tf = false;
+    if isempty(value)
+        return;
+    end
+    if isnan(value)
+        tf = true;
+        return;
+    end
+    if isfinite(value) && value <= 0
+        tf = true;
     end
 end

@@ -7,7 +7,8 @@ function baseHandles = BaseControl(updateCallback)
                              'MenuBar', 'none', 'Position', [1320 100 350 550], 'Color', 'w');
 
     % 2. 定义标签和范围
-    labels = {'基座 X (m)', '基座 Y (m)', '基座 Z (m)', 'Roll (deg)', 'Pitch (deg)', 'Yaw (deg)'};
+    labels = {'Base X (world,m)', 'Base Y (world,m)', 'Base Z (world,m)', ...
+              'Base Roll (deg)', 'Base Pitch (deg)', 'Base Yaw (deg)'};
     limits = [-2 2; -2 2; 0 1; -180 180; -180 180; -180 180];
     initVals = [0 0 0 0 0 0];
 
