@@ -1,4 +1,4 @@
-function shovel_bucket_parabola_ik_demo_assembly_comp()
+function shovel_bucket_parabola_ik_demo_stable()
 % UR10 shovel parabola scoop demo (hanging setup + GUI tune + run button)
 % - Robot is mounted upside-down (lab setup)
 % - Parabola is defined in robot base-link frame and can be tuned by GUI sliders
@@ -10,7 +10,7 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
 
     fprintf('\n================ PARABOLA SCOOP IK DEMO ================\n');
     fprintf('[INFO] script=%s\n', mfilename('fullpath'));
-    fprintf('[INFO] version=2026-04-17-parabola-v7-assembly-offset\n');
+    fprintf('[INFO] version=2026-04-17-parabola-v8-stable-ik\n');
 
     %% 1) Model init
     urdfFile = 'ur10_world.urdf';
@@ -65,7 +65,10 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
     params.halfSpan = 0.20;
     params.depth = 0.50;
     params.pitchBiasDeg = -12.0;
-    params.assemblyOffsetDeg = 0.0;
+    params.qJumpWeight = 0.08;        % score权重: 关节连续性
+    params.primaryPosTol = 0.035;     % m
+    params.primaryOriTolDeg = 12.0;   % deg
+    params.primaryYAlignTolDeg = 12.0;% deg
     params.framePause = 0.03;
     params.reachRadius = estimateReachRadius(robot, baseLink, endEffector, 0.20);
     params.showReachSphere = true;
@@ -113,33 +116,31 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
         'depth (m)', 0.05, 1.20, params.depth, @(v) onParamChange('depth', v));
     sPitchBias = createSliderControl(fig, panelX, 0.50, panelW, rowH, ...
         'pitchBias (deg)', -45, 45, params.pitchBiasDeg, @(v) onParamChange('pitchBiasDeg', v));
-    sAssemblyOffset = createSliderControl(fig, panelX, 0.42, panelW, rowH, ...
-        '装配偏角 (deg)', -180, 180, params.assemblyOffsetDeg, @(v) onParamChange('assemblyOffsetDeg', v));
-    sSpeed = createSliderControl(fig, panelX, 0.34, panelW, rowH, ...
+    sSpeed = createSliderControl(fig, panelX, 0.42, panelW, rowH, ...
         'framePause (s)', 0.005, 0.10, params.framePause, @(v) onParamChange('framePause', v));
-    sReach = createSliderControl(fig, panelX, 0.26, panelW, rowH, ...
+    sReach = createSliderControl(fig, panelX, 0.34, panelW, rowH, ...
         'reachRadius (m)', 0.60, 3.00, params.reachRadius, @(v) onParamChange('reachRadius', v));
     cbFlipZ = uicontrol('Parent', fig, 'Style', 'checkbox', 'Units', 'normalized', ...
-        'Position', [panelX, 0.19, panelW, 0.03], 'String', '反向工具Z轴 (测试装反)', ...
+        'Position', [panelX, 0.30, panelW, 0.03], 'String', '反向工具Z轴 (测试装反)', ...
         'Value', params.flipToolZ, 'BackgroundColor', get(fig,'Color'), ...
         'Callback', @onFlipZChanged);
 
     btnRun = uicontrol('Parent', fig, 'Style', 'pushbutton', 'Units', 'normalized', ...
-        'Position', [panelX, 0.12, panelW, 0.06], 'String', '运行 (Run)', ...
+        'Position', [panelX, 0.23, panelW, 0.06], 'String', '运行 (Run)', ...
         'FontSize', 12, 'FontWeight', 'bold', 'Callback', @onRun);
 
     btnReset = uicontrol('Parent', fig, 'Style', 'pushbutton', 'Units', 'normalized', ...
-        'Position', [panelX, 0.05, panelW, 0.06], 'String', '重置参数', ...
+        'Position', [panelX, 0.16, panelW, 0.06], 'String', '重置参数', ...
         'FontSize', 11, 'Callback', @onResetParams);
 
     txtState = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
-        'Position', [panelX, 0.00, panelW, 0.03], ...
+        'Position', [panelX, 0.08, panelW, 0.06], ...
         'String', '状态: 就绪 (调整参数后点击运行)', ...
         'HorizontalAlignment', 'left', 'BackgroundColor', get(fig,'Color'), ...
         'ForegroundColor', [0 0.45 0], 'FontSize', 10);
 
     txtHint = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
-        'Position', [panelX, 0.03, panelW, 0.02], ...
+        'Position', [panelX, 0.04, panelW, 0.03], ...
         'String', '命令行会持续打印实时进度', ...
         'HorizontalAlignment', 'left', 'BackgroundColor', get(fig,'Color'), ...
         'ForegroundColor', [0.2 0.2 0.2], 'FontSize', 9);
@@ -168,7 +169,10 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
         params.halfSpan = 0.20;
         params.depth = 0.50;
         params.pitchBiasDeg = -12.0;
-        params.assemblyOffsetDeg = 0.0;
+        params.qJumpWeight = 0.08;
+        params.primaryPosTol = 0.035;
+        params.primaryOriTolDeg = 12.0;
+        params.primaryYAlignTolDeg = 12.0;
         params.framePause = 0.03;
         params.reachRadius = estimateReachRadius(robot, baseLink, endEffector, 0.20);
         params.flipToolZ = true;
@@ -179,7 +183,6 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
         set(sHalfSpan.slider, 'Value', params.halfSpan); set(sHalfSpan.valueText, 'String', sprintf('%.3f', params.halfSpan));
         set(sDepth.slider, 'Value', params.depth); set(sDepth.valueText, 'String', sprintf('%.3f', params.depth));
         set(sPitchBias.slider, 'Value', params.pitchBiasDeg); set(sPitchBias.valueText, 'String', sprintf('%.3f', params.pitchBiasDeg));
-        set(sAssemblyOffset.slider, 'Value', params.assemblyOffsetDeg); set(sAssemblyOffset.valueText, 'String', sprintf('%.3f', params.assemblyOffsetDeg));
         set(sSpeed.slider, 'Value', params.framePause); set(sSpeed.valueText, 'String', sprintf('%.3f', params.framePause));
         set(sReach.slider, 'Value', params.reachRadius); set(sReach.valueText, 'String', sprintf('%.3f', params.reachRadius));
         set(cbFlipZ, 'Value', params.flipToolZ);
@@ -210,28 +213,31 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
         cleanupObj = onCleanup(@() releaseRunLock()); %#ok<NASGU>
 
         fprintf('\n========================= RUN =========================\n');
-        thetaCompDeg = params.pitchBiasDeg + params.assemblyOffsetDeg;
-        fprintf('[RUN] params: centerX=%.3f, y=%.3f, zTop=%.3f, halfSpan=%.3f, depth=%.3f, pitchBias=%.2f, assemblyOffset=%.2f, thetaComp=%.2f, zFlip=%d\n', ...
-            params.centerX, params.yConst, params.zTop, params.halfSpan, params.depth, ...
-            params.pitchBiasDeg, params.assemblyOffsetDeg, thetaCompDeg, params.flipToolZ);
+        fprintf('[RUN] params: centerX=%.3f, y=%.3f, zTop=%.3f, halfSpan=%.3f, depth=%.3f, pitchBias=%.2f, zFlip=%d\n', ...
+            params.centerX, params.yConst, params.zTop, params.halfSpan, params.depth, params.pitchBiasDeg, params.flipToolZ);
+        fprintf('[RUN] anti-jump: qJumpW=%.3f, primaryTol[pos<=%.3fm ori<=%.1fdeg y<=%.1fdeg]\n', ...
+            params.qJumpWeight, params.primaryPosTol, params.primaryOriTolDeg, params.primaryYAlignTolDeg);
 
         % recompute latest preview geometry
         refreshPreview(true);
 
         T_w_b = getTransform(robot, qCurrent, baseLink, baseFrame);
         R_w_b = T_w_b(1:3,1:3);
-        thetaCompRad = deg2rad(thetaCompDeg);
-        R_comp = axisAngleRotm([0;1;0], thetaCompRad);
+        pitchBiasRad = deg2rad(params.pitchBiasDeg);
 
         nJ = numel(qCurrent);
         qTraj = zeros(nPts, nJ);
         posErr = zeros(nPts,1);
         oriErrDeg = zeros(nPts,1);
         yAlignErrDeg = zeros(nPts,1);
+        qJumpRad = zeros(nPts,1);
         statusArr = strings(nPts,1);
 
         qPrev = clampToLimits(qCurrent, jointLimits);
         qHomeLocal = clampToLimits(homeConfiguration(robot), jointLimits);
+        prevXAxis_b = [];
+        prevZAxis_b = [];
+        fallbackCount = 0;
 
         fprintf('[RUN] IK solving starts... total points=%d\n', nPts);
         for i = 1:nPts
@@ -254,9 +260,23 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
             xAxis_b = cross(yAxis_b, zAxis_b);
             xAxis_b = xAxis_b / max(norm(xAxis_b), 1e-12);
 
-            % 统一Y轴补偿: 攻角偏置 + 装配偏角。
+            % 姿态连续化: 若与上一帧坐标轴反向, 则整体翻转x/z避免180deg跳变。
+            if ~isempty(prevXAxis_b)
+                if dot(xAxis_b, prevXAxis_b) < 0
+                    xAxis_b = -xAxis_b;
+                    zAxis_b = -zAxis_b;
+                end
+                if dot(zAxis_b, prevZAxis_b) < 0
+                    xAxis_b = -xAxis_b;
+                    zAxis_b = -zAxis_b;
+                end
+            end
+            prevXAxis_b = xAxis_b;
+            prevZAxis_b = zAxis_b;
+
+            % Optional tool attitude bias: rotate around local y-axis, preserving y alignment.
             R_b_nom = [xAxis_b, yAxis_b, zAxis_b];
-            R_b = R_b_nom * R_comp;
+            R_b = R_b_nom * axisAngleRotm([0;1;0], pitchBiasRad);
             R_tar = R_w_b * R_b;
             yTarWorld = R_tar(:,2);
 
@@ -264,20 +284,39 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
             T_tar(1:3,1:3) = R_tar;
             T_tar(1:3,4) = pathWorld(i,:)';
 
-            seeds = [qPrev; qCurrent; qHomeLocal];
-            [qBest, infoBest, ePos, eOriDeg, eYAlignDeg] = solveOneTarget(T_tar, seeds, yTarWorld);
+            % Seed策略: 先仅用qPrev保持连续, 不满足阈值再回退到[qCurrent, qHome]。
+            seedTag = 'P';
+            [qBest, infoBest, ePos, eOriDeg, eYAlignDeg, eQJump, scoreBest] = ...
+                solveOneTarget(T_tar, qPrev, yTarWorld, qPrev);
+
+            if ~isSolveAcceptable(infoBest, ePos, eOriDeg, eYAlignDeg)
+                [qFb, infoFb, ePosFb, eOriFb, eYAlignFb, eQJumpFb, scoreFb] = ...
+                    solveOneTarget(T_tar, [qCurrent; qHomeLocal], yTarWorld, qPrev);
+                fallbackCount = fallbackCount + 1;
+
+                if scoreFb < scoreBest
+                    qBest = qFb;
+                    infoBest = infoFb;
+                    ePos = ePosFb;
+                    eOriDeg = eOriFb;
+                    eYAlignDeg = eYAlignFb;
+                    eQJump = eQJumpFb;
+                    seedTag = 'F';
+                end
+            end
 
             qTraj(i,:) = qBest;
             qPrev = qBest;
             posErr(i) = ePos;
             oriErrDeg(i) = eOriDeg;
             yAlignErrDeg(i) = eYAlignDeg;
-            statusArr(i) = string(infoBest.Status);
+            qJumpRad(i) = eQJump;
+            statusArr(i) = string(sprintf('%s|%s', seedTag, infoBest.Status));
 
             if i <= 5 || mod(i,10) == 0 || i == nPts
                 fprintf(['[IK %03d/%03d] x=%.3f k=%.3f tan=%.2fdeg | posErr=%.4fm oriErr=%.2fdeg ' ...
-                    'yAlignErr=%.2fdeg status=%s\n'], ...
-                    i, nPts, x_b, k, tanAngleDeg, ePos, eOriDeg, eYAlignDeg, infoBest.Status);
+                    'yAlignErr=%.2fdeg qJump=%.3frad seed=%s status=%s\n'], ...
+                    i, nPts, x_b, k, tanAngleDeg, ePos, eOriDeg, eYAlignDeg, eQJump, seedTag, infoBest.Status);
             end
 
             if mod(i,10) == 0
@@ -288,6 +327,8 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
 
         fprintf('[RUN] IK done. posErr mean=%.4f max=%.4f | oriErr mean=%.2f max=%.2f | yAlignErr mean=%.2f max=%.2f (deg)\n', ...
             mean(posErr), max(posErr), mean(oriErrDeg), max(oriErrDeg), mean(yAlignErrDeg), max(yAlignErrDeg));
+        fprintf('[RUN] continuity stats: qJump mean=%.3f max=%.3f (rad), fallbackUsed=%d/%d\n', ...
+            mean(qJumpRad), max(qJumpRad), fallbackCount, nPts);
 
         % animate
         fprintf('[RUN] Animation starts...\n');
@@ -388,7 +429,7 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
         title(ax, sprintf('倒挂UR10 | %s | TCP y轴 // 抛物线方向 | zFlip=%d', stageName, params.flipToolZ));
     end
 
-    function [qBest, infoBest, posBest, oriBestDeg, yAlignBestDeg] = solveOneTarget(Ttar, seeds, yTarWorld)
+    function [qBest, infoBest, posBest, oriBestDeg, yAlignBestDeg, qJumpBest, scoreBest] = solveOneTarget(Ttar, seeds, yTarWorld, qRef)
         pTar = tform2trvec(Ttar);
         RTar = tform2rotm(Ttar);
 
@@ -397,7 +438,8 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
         posBest = inf;
         oriBestDeg = inf;
         yAlignBestDeg = inf;
-        bestScore = inf;
+        qJumpBest = inf;
+        scoreBest = inf;
 
         for s = 1:size(seeds,1)
             seed = clampToLimits(seeds(s,:), jointLimits);
@@ -415,16 +457,32 @@ function shovel_bucket_parabola_ik_demo_assembly_comp()
             c = min(max(c, -1), 1);
             yAlignErrDeg = rad2deg(acos(c)); % ideal 0 deg
 
-            score = posErr + 0.01 * oriErrDeg + 0.02 * yAlignErrDeg;
-            if score < bestScore
-                bestScore = score;
+            dQ = atan2(sin(qTry - qRef), cos(qTry - qRef)); % wrap到[-pi,pi]
+            qJump = norm(dQ);
+
+            score = posErr + 0.01 * oriErrDeg + 0.02 * yAlignErrDeg + params.qJumpWeight * qJump;
+            if score < scoreBest
+                scoreBest = score;
                 qBest = qTry;
                 infoBest = infoTry;
                 posBest = posErr;
                 oriBestDeg = oriErrDeg;
                 yAlignBestDeg = yAlignErrDeg;
+                qJumpBest = qJump;
             end
         end
+    end
+
+    function ok = isSolveAcceptable(infoIn, posIn, oriIn, yAlignIn)
+        ok = isIKStatusGood(infoIn.Status) && ...
+            (posIn <= params.primaryPosTol) && ...
+            (oriIn <= params.primaryOriTolDeg) && ...
+            (yAlignIn <= params.primaryYAlignTolDeg);
+    end
+
+    function good = isIKStatusGood(statusIn)
+        s = lower(string(statusIn));
+        good = contains(s, "success") || contains(s, "solved");
     end
 end
 
