@@ -4,6 +4,9 @@ function ur10_joint_slider_control(urdfFile)
 %   ur10_joint_slider_control
 %   ur10_joint_slider_control('ur10_world.urdf')
 
+    fprintf('[INFO] script=%s\n', mfilename('fullpath'));
+    fprintf('[INFO] version=2026-04-16-joint-slider-v3\n');
+
     if nargin < 1 || isempty(urdfFile)
         urdfFile = 'ur10_world.urdf';
     end
@@ -21,6 +24,8 @@ function ur10_joint_slider_control(urdfFile)
         fprintf('[DEBUG] importrobot failed. message=%s\n', ME.message);
         rethrow(ME);
     end
+
+    robot = applyUpsideDownBase(robot);
 
     [jointNames, jointLimits] = getRevoluteJointInfo(robot);
     n = numel(jointNames);
@@ -91,7 +96,7 @@ function ur10_joint_slider_control(urdfFile)
     camState = [];
     renderRobot();
 
-    % 锁定当前相机，避免拖动关节时视角/缩放变化
+    % 初始化相机状态；后续每次重绘前都会重新抓取当前状态
     camState = captureCameraState(ax);
 
     function onSliderChanged(idx, val)
@@ -112,13 +117,19 @@ function ur10_joint_slider_control(urdfFile)
 
     function renderRobot()
         try
+            % 先抓当前相机状态，避免 show() 清空后回到默认视角
+            if ~isempty(camState)
+                camState = captureCameraState(ax);
+            end
+
             show(robot, q, 'Parent', ax, 'PreservePlot', false, 'FastUpdate', true);
+
             if ~isempty(camState)
                 restoreCameraState(ax, camState);
             else
                 view(ax, 135, 25);
             end
-            setFixedWorkspace(ax);
+
             grid(ax, 'on');
             drawnow limitrate;
         catch ME
@@ -148,6 +159,15 @@ function [jointNames, jointLimits] = getRevoluteJointInfo(robot)
             jointLimits = [jointLimits; lim]; %#ok<AGROW>
         end
     end
+end
+
+function robot = applyUpsideDownBase(robot)
+    rootBody = robot.Bodies{1};
+    t0 = rootBody.Joint.JointToParentTransform;
+    tFlip = eul2tform([0, 0, pi], 'ZYX'); % roll=pi，倒挂
+    tNew = t0 * tFlip;
+    setFixedTransform(rootBody.Joint, tNew);
+    fprintf('[INFO] Upside-down base enabled. root=%s, joint=%s\n', rootBody.Name, rootBody.Joint.Name);
 end
 
 function y = clamp(x, lo, hi)
@@ -182,5 +202,3 @@ function restoreCameraState(ax, s)
     ax.CameraUpVector = s.CameraUpVector;
     ax.CameraViewAngle = s.CameraViewAngle;
 end
-    fprintf('[INFO] script=%s\n', mfilename('fullpath'));
-    fprintf('[INFO] version=2026-04-16-joint-slider-v3\n');
