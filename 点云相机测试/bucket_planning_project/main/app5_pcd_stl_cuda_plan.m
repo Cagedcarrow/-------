@@ -52,10 +52,22 @@ params.startFinishLiftRatio = 0.25;
 params.nPts = 90;
 params.useGPU = true;
 params.forceGPU = false;
+params.usePaperDpRrt = true;
+params.compareWithBaseline = true;
 params.reverseFitZAxis = true;
 params.savePreviewVideo = true;
 params.stlNTheta = 120;
 params.stlNHeight = 44;
+params.dpGoalBiasInit = 0.28;
+params.dpGoalBiasMin = 0.03;
+params.dpRhoInit = 0.50;
+params.dpDecayRate = 0.50;
+params.dpLambdaMax = 0.24;
+params.dpLambdaMin = 0.08;
+params.dpDSafe = 0.35;
+params.dpStepKappa = 3.00;
+params.dpFailRecovery = 2;
+params.dpMaxCollisionSamples = 1500;
 
 fig = figure('Name', 'App5 - PCD -> STL + CUDA RRT* Planner', 'Color', 'w', ...
     'Position', [90, 50, 1560, 860]);
@@ -115,6 +127,10 @@ cbForceGPU = uicontrol('Parent', fig, 'Style', 'checkbox', 'Units', 'normalized'
     'Position', [panelX, 0.18, panelW, 0.03], 'String', 'forceGPU (strict)', ...
     'Value', params.forceGPU, 'BackgroundColor', get(fig, 'Color'), ...
     'Callback', @(src,~) onToggleBool('forceGPU', src.Value));
+cbPaperDp = uicontrol('Parent', fig, 'Style', 'checkbox', 'Units', 'normalized', ...
+    'Position', [panelX, 0.30, panelW, 0.03], 'String', 'use paper DP-RRT*', ...
+    'Value', params.usePaperDpRrt, 'BackgroundColor', get(fig, 'Color'), ...
+    'Callback', @(src,~) onToggleBool('usePaperDpRrt', src.Value));
 cbSaveVideo = uicontrol('Parent', fig, 'Style', 'checkbox', 'Units', 'normalized', ...
     'Position', [panelX, 0.15, panelW, 0.03], 'String', 'save preview video', ...
     'Value', params.savePreviewVideo, 'BackgroundColor', get(fig, 'Color'), ...
@@ -342,28 +358,77 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
             'verbose', true, ...
             'logEvery', 80, ...
             'useGPU', logical(params.useGPU), ...
-            'forceGPU', logical(params.forceGPU));
+            'forceGPU', logical(params.forceGPU), ...
+            'goalBiasInit', params.dpGoalBiasInit, ...
+            'goalBiasMin', params.dpGoalBiasMin, ...
+            'rhoInit', params.dpRhoInit, ...
+            'decayRate', params.dpDecayRate, ...
+            'lambdaMax', params.dpLambdaMax, ...
+            'lambdaMin', params.dpLambdaMin, ...
+            'dSafe', params.dpDSafe, ...
+            'stepKappa', params.dpStepKappa, ...
+            'failRecovery', params.dpFailRecovery, ...
+            'maxCollisionSamples', params.dpMaxCollisionSamples);
 
-        try
-            [qApproach, rrtInfo] = plan_rrtstar_joint_path_cuda( ...
+        if params.usePaperDpRrt
+            primaryPlanner = 'dp_rrtstar_cuda';
+            comparePlanner = 'rrtstar_cuda';
+        else
+            primaryPlanner = 'rrtstar_cuda';
+            comparePlanner = 'dp_rrtstar_cuda';
+        end
+        fprintf('[main.05] planner primary=%s compare=%d baseline=%s\n', ...
+            primaryPlanner, params.compareWithBaseline, comparePlanner);
+
+        planSeed = max(1, floor(mod(now * 86400000, 2^31 - 1)));
+        rng(planSeed, 'twister');
+        [qApproach, rrtInfo] = runApproachPlanner(primaryPlanner, ...
+            state.qCurrent, qEntry, state.jointLimits, collisionFcn, plannerOpts);
+        rrtInfo.planSeed = planSeed;
+
+        compareInfo = struct();
+        if params.compareWithBaseline
+            rng(planSeed, 'twister');
+            [~, compareInfo] = runApproachPlanner(comparePlanner, ...
                 state.qCurrent, qEntry, state.jointLimits, collisionFcn, plannerOpts);
-            fprintf('[main.05] approach success=%d nodes=%d pts=%d gpu=%d\n', ...
-                rrtInfo.success, rrtInfo.numNodes, size(qApproach, 1), rrtInfo.gpu.enabled);
-        catch ME
-            warning('[main.05] CUDA planner failed: %s', ME.message);
-            if ~params.forceGPU
-                fprintf('[main.05] fallback to CPU rrtstar...\n');
-                [qApproach, infoCPU] = plan_rrtstar_joint_path( ...
-                    state.qCurrent, qEntry, state.jointLimits, collisionFcn, ...
-                    rmfield(plannerOpts, {'useGPU', 'forceGPU'}));
-                rrtInfo = infoCPU;
-                rrtInfo.gpu = struct('enabled', false, 'reason', 'fallback_cpu');
-            else
-                qApproach = [state.qCurrent; qEntry];
-                rrtInfo = struct('success', false, 'numNodes', 0, ...
-                    'message', ME.message, 'gpu', struct('enabled', false, 'reason', 'force_gpu_exception'));
+            primarySuccess = getNumericField(rrtInfo, 'success', 0) > 0.5;
+            baseSuccess = getNumericField(compareInfo, 'success', 0) > 0.5;
+            primaryLen = getNumericField(rrtInfo, 'pathLength', nan);
+            baseLen = getNumericField(compareInfo, 'pathLength', nan);
+            primaryTime = getNumericField(rrtInfo, 'elapsedSec', nan);
+            baseTime = getNumericField(compareInfo, 'elapsedSec', nan);
+            fprintf(['[main.05][compare] primary=%s success=%d nodes=%d len=%.3f t=%.3fs | ' ...
+                'baseline=%s success=%d nodes=%d len=%.3f t=%.3fs\n'], ...
+                getTextField(rrtInfo, 'algorithm', primaryPlanner), getNumericField(rrtInfo, 'success', 0), ...
+                getNumericField(rrtInfo, 'numNodes', 0), getNumericField(rrtInfo, 'pathLength', nan), ...
+                getNumericField(rrtInfo, 'elapsedSec', nan), ...
+                getTextField(compareInfo, 'algorithm', comparePlanner), getNumericField(compareInfo, 'success', 0), ...
+                getNumericField(compareInfo, 'numNodes', 0), getNumericField(compareInfo, 'pathLength', nan), ...
+                getNumericField(compareInfo, 'elapsedSec', nan));
+            fprintf('[main.05][compare] delta(pathLen baseline-primary)=%.3f delta(time baseline-primary)=%.3f\n', ...
+                getNumericField(compareInfo, 'pathLength', nan) - getNumericField(rrtInfo, 'pathLength', nan), ...
+                getNumericField(compareInfo, 'elapsedSec', nan) - getNumericField(rrtInfo, 'elapsedSec', nan));
+            if primarySuccess && baseSuccess && isfinite(primaryLen) && isfinite(baseLen)
+                if primaryLen < baseLen
+                    fprintf('[main.05][compare] quality: primary path is shorter by %.3f\n', baseLen - primaryLen);
+                else
+                    fprintf('[main.05][compare] quality: baseline path is shorter by %.3f\n', primaryLen - baseLen);
+                end
+            end
+            if primarySuccess && baseSuccess && isfinite(primaryTime) && isfinite(baseTime)
+                if primaryTime < baseTime
+                    fprintf('[main.05][compare] speed: primary is faster by %.3fs\n', baseTime - primaryTime);
+                else
+                    fprintf('[main.05][compare] speed: baseline is faster by %.3fs\n', primaryTime - baseTime);
+                end
+            end
+            if primarySuccess && ~baseSuccess
+                fprintf('[main.05][compare] robustness: primary succeeded while baseline failed.\n');
+            elseif ~primarySuccess && baseSuccess
+                fprintf('[main.05][compare] robustness: baseline succeeded while primary failed.\n');
             end
         end
+
         if size(qApproach, 1) < 2
             qApproach = [state.qCurrent; qEntry];
         end
@@ -414,6 +479,10 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
         summary.features = state.features;
         summary.fitInfo = state.fitInfo;
         summary.rrtInfo = rrtInfo;
+        summary.compareInfo = compareInfo;
+        summary.primaryPlanner = getTextField(rrtInfo, 'algorithm', '');
+        summary.comparePlannerEnabled = logical(params.compareWithBaseline);
+        summary.compareStats = buildCompareStats(rrtInfo, compareInfo);
         summary.runInfo = runInfo;
         summary.params = params;
         summary.videoSessionDir = state.videoSessionDir;
@@ -435,6 +504,78 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
         fprintf('[main.05] ===== DONE ===== timeout=%d hold=%d fallback=%d\n', ...
             runInfo.timeoutTriggered, runInfo.nHold, runInfo.nFallback);
         fprintf('[main.05] videos: fit=%s | exec=%s\n', summary.fitVideoPath, summary.execVideoPath);
+    end
+
+    function [qPlan, planInfo] = runApproachPlanner(mode, qStartIn, qGoalIn, jointLimitsIn, collisionFcnIn, plannerOptsIn)
+        qPlan = [qStartIn; qGoalIn];
+        planInfo = struct('success', false, 'numNodes', 0, 'pathLength', nan, ...
+            'numPathPoints', size(qPlan, 1), 'algorithm', mode, 'message', 'not started');
+        tPlan = tic;
+
+        try
+            switch lower(mode)
+                case 'dp_rrtstar_cuda'
+                    [qPlan, planInfo] = plan_dprrtstar_joint_path_cuda( ...
+                        qStartIn, qGoalIn, jointLimitsIn, collisionFcnIn, plannerOptsIn);
+                case 'rrtstar_cuda'
+                    [qPlan, planInfo] = plan_rrtstar_joint_path_cuda( ...
+                        qStartIn, qGoalIn, jointLimitsIn, collisionFcnIn, plannerOptsIn);
+                case 'rrtstar_cpu'
+                    [qPlan, planInfo] = plan_rrtstar_joint_path( ...
+                        qStartIn, qGoalIn, jointLimitsIn, collisionFcnIn, ...
+                        rmfield(plannerOptsIn, {'useGPU', 'forceGPU'}));
+                otherwise
+                    error('[main.05] unknown planner mode: %s', mode);
+            end
+        catch ME
+            warning('[main.05] planner %s failed: %s', mode, ME.message);
+            if strcmpi(mode, 'rrtstar_cuda') && ~plannerOptsIn.forceGPU
+                fprintf('[main.05] fallback: rrtstar cpu\n');
+                [qPlan, planInfo] = plan_rrtstar_joint_path( ...
+                    qStartIn, qGoalIn, jointLimitsIn, collisionFcnIn, ...
+                    rmfield(plannerOptsIn, {'useGPU', 'forceGPU'}));
+                planInfo.algorithm = 'rrtstar_cpu_fallback';
+                planInfo.gpu = struct('enabled', false, 'reason', 'fallback_cpu');
+            elseif strcmpi(mode, 'dp_rrtstar_cuda') && ~plannerOptsIn.forceGPU
+                fprintf('[main.05] fallback: dp-rrt* cpu mode\n');
+                dpCpuOpts = plannerOptsIn;
+                dpCpuOpts.useGPU = false;
+                dpCpuOpts.forceGPU = false;
+                [qPlan, planInfo] = plan_dprrtstar_joint_path_cuda( ...
+                    qStartIn, qGoalIn, jointLimitsIn, collisionFcnIn, dpCpuOpts);
+                planInfo.algorithm = 'dp_rrtstar_cpu_fallback';
+                if ~isfield(planInfo, 'gpu')
+                    planInfo.gpu = struct('enabled', false, 'reason', 'fallback_cpu');
+                else
+                    planInfo.gpu.enabled = false;
+                    planInfo.gpu.reason = 'fallback_cpu';
+                end
+            else
+                qPlan = [qStartIn; qGoalIn];
+                planInfo = struct('success', false, 'numNodes', 0, ...
+                    'pathLength', norm(qGoalIn - qStartIn), 'numPathPoints', size(qPlan, 1), ...
+                    'algorithm', [mode '_failed'], 'message', ME.message, ...
+                    'gpu', struct('enabled', false, 'reason', 'exception'));
+            end
+        end
+
+        planInfo.elapsedSec = toc(tPlan);
+        if ~isfield(planInfo, 'algorithm') || isempty(planInfo.algorithm)
+            planInfo.algorithm = mode;
+        end
+        if ~isfield(planInfo, 'pathLength')
+            planInfo.pathLength = pathLength(qPlan);
+        end
+        if ~isfield(planInfo, 'numPathPoints')
+            planInfo.numPathPoints = size(qPlan, 1);
+        end
+        if ~isfield(planInfo, 'numNodes')
+            planInfo.numNodes = 0;
+        end
+        fprintf('[main.05] planner %s done: success=%d nodes=%d pts=%d len=%.3f t=%.3fs\n', ...
+            planInfo.algorithm, getNumericField(planInfo, 'success', 0), ...
+            getNumericField(planInfo, 'numNodes', 0), size(qPlan, 1), ...
+            getNumericField(planInfo, 'pathLength', nan), getNumericField(planInfo, 'elapsedSec', nan));
     end
 
     function renderBaseScene()
@@ -613,4 +754,81 @@ out.valueText = uicontrol('Parent', parentFig, 'Style', 'text', 'Units', 'normal
         out.valueText.String = sprintf(fmt, val);
         cb(val);
     end
+end
+
+function v = getNumericField(s, fieldName, defaultValue)
+if nargin < 3
+    defaultValue = nan;
+end
+v = defaultValue;
+if ~isstruct(s) || ~isfield(s, fieldName)
+    return;
+end
+raw = s.(fieldName);
+if isempty(raw)
+    return;
+end
+if islogical(raw)
+    v = double(raw);
+    return;
+end
+if isnumeric(raw) && isscalar(raw)
+    v = double(raw);
+end
+end
+
+function t = getTextField(s, fieldName, defaultValue)
+if nargin < 3
+    defaultValue = '';
+end
+t = defaultValue;
+if ~isstruct(s) || ~isfield(s, fieldName)
+    return;
+end
+raw = s.(fieldName);
+if isstring(raw) || ischar(raw)
+    t = char(raw);
+end
+end
+
+function L = pathLength(qPath)
+if isempty(qPath) || size(qPath, 1) < 2
+    L = 0;
+    return;
+end
+d = diff(qPath, 1, 1);
+L = sum(vecnorm(d, 2, 2));
+end
+
+function out = buildCompareStats(primaryInfo, baselineInfo)
+out = struct();
+out.primaryAlgorithm = getTextField(primaryInfo, 'algorithm', '');
+out.baselineAlgorithm = getTextField(baselineInfo, 'algorithm', '');
+out.primarySuccess = getNumericField(primaryInfo, 'success', 0) > 0.5;
+out.baselineSuccess = getNumericField(baselineInfo, 'success', 0) > 0.5;
+out.primaryPathLength = getNumericField(primaryInfo, 'pathLength', nan);
+out.baselinePathLength = getNumericField(baselineInfo, 'pathLength', nan);
+out.primaryTimeSec = getNumericField(primaryInfo, 'elapsedSec', nan);
+out.baselineTimeSec = getNumericField(baselineInfo, 'elapsedSec', nan);
+out.deltaPathLength = out.baselinePathLength - out.primaryPathLength;
+out.deltaTimeSec = out.baselineTimeSec - out.primaryTimeSec;
+if out.primarySuccess && ~out.baselineSuccess
+    out.verdict = 'primary_more_robust';
+elseif ~out.primarySuccess && out.baselineSuccess
+    out.verdict = 'baseline_more_robust';
+elseif out.primarySuccess && out.baselineSuccess
+    if isfinite(out.deltaPathLength) && isfinite(out.deltaTimeSec)
+        if out.deltaPathLength >= 0 && out.deltaTimeSec >= 0
+            out.verdict = 'primary_better_both';
+        elseif out.deltaPathLength < 0 && out.deltaTimeSec < 0
+            out.verdict = 'baseline_better_both';
+        else
+            out.verdict = 'tradeoff';
+        end
+    else
+        out.verdict = 'tradeoff';
+    end
+else
+    out.verdict = 'both_failed';
+end
 end
