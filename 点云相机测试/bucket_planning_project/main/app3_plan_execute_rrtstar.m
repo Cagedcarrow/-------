@@ -30,15 +30,23 @@ state.T_target_seq = [];
 state.keyPts = struct();
 
 trajParams = struct();
-trajParams.entrySpanFactor = 0.95;
+trajParams.entrySpanFactor = 1.00;
 trajParams.midSpanFactor = 0.35;
-trajParams.exitSpanFactor = 0.90;
+trajParams.exitSpanFactor = 1.00;
 trajParams.entryLift = 0.04;
-trajParams.entryDepthRatio = 0.45;
-trajParams.deepDepthRatio = 0.88;
-trajParams.exitDepthRatio = 0.22;
+trajParams.entryDepthRatio = 0.20;
+trajParams.deepDepthRatio = 0.25;
+trajParams.exitDepthRatio = 0.16;
 trajParams.midSlopeAtKnot1 = -0.20;
 trajParams.localYOffset = 0.0;
+trajParams.maxCutAngleDeg = 30.0;
+trajParams.maxDeepDepthRatio = 0.25;
+trajParams.minDeltaAroundDeep = 0.04;
+trajParams.topOuterOffsetRatio = 0.125;
+trajParams.startFinishLiftRatio = 0.25;
+trajParams.targetDeepDepthRatio = 0.15;
+trajParams.execFirstMode = true;
+trajParams.forceBaseXDir = true;
 
 postureParams = struct('attackDeg', -12.0, 'assemblyDeg', 0.0, 'flipToolZ', true);
 nPts = 90;
@@ -69,13 +77,15 @@ sAttack = createSliderControl(fig, panelX, 0.72, panelW, rowH, 'attackDeg', -45,
     @(v) onSetPosture('attackDeg', v));
 sAssembly = createSliderControl(fig, panelX, 0.65, panelW, rowH, 'assemblyDeg', -180, 180, postureParams.assemblyDeg, ...
     @(v) onSetPosture('assemblyDeg', v));
-sEntryD = createSliderControl(fig, panelX, 0.57, panelW, rowH, 'entryDepthRatio', 0.20, 0.90, trajParams.entryDepthRatio, ...
+sEntryD = createSliderControl(fig, panelX, 0.57, panelW, rowH, 'entryDepthRatio', 0.08, 0.35, trajParams.entryDepthRatio, ...
     @(v) onSetTraj('entryDepthRatio', v));
-sDeepD = createSliderControl(fig, panelX, 0.50, panelW, rowH, 'deepDepthRatio', 0.40, 0.98, trajParams.deepDepthRatio, ...
+sDeepD = createSliderControl(fig, panelX, 0.50, panelW, rowH, 'deepDepth(固定0.15)', 0.12, 0.35, trajParams.deepDepthRatio, ...
     @(v) onSetTraj('deepDepthRatio', v));
-sExitD = createSliderControl(fig, panelX, 0.43, panelW, rowH, 'exitDepthRatio', 0.05, 0.70, trajParams.exitDepthRatio, ...
+set(sDeepD.slider, 'Enable', 'off');
+set(sDeepD.valueText, 'String', '0.150');
+sExitD = createSliderControl(fig, panelX, 0.43, panelW, rowH, 'exitDepthRatio', 0.05, 0.30, trajParams.exitDepthRatio, ...
     @(v) onSetTraj('exitDepthRatio', v));
-sMidS = createSliderControl(fig, panelX, 0.36, panelW, rowH, 'midSlopeAtKnot1', -1.2, 0.3, trajParams.midSlopeAtKnot1, ...
+sMidS = createSliderControl(fig, panelX, 0.36, panelW, rowH, 'midSlopeAtKnot1', -0.57, 0.30, trajParams.midSlopeAtKnot1, ...
     @(v) onSetTraj('midSlopeAtKnot1', v));
 
 cbFlip = uicontrol('Parent', fig, 'Style', 'checkbox', 'Units', 'normalized', ...
@@ -186,6 +196,8 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
             set(txtStatus, 'String', 'Status: load scene first', 'ForegroundColor', [0.85 0.2 0.1]);
             return;
         end
+        % Fixed by task requirement: deepest point at 0.15 bucket depth.
+        trajParams.targetDeepDepthRatio = 0.15;
 
         features = state.perception.features;
         [pathBase, segments, keyPts, Tseq, fitInfo] = fit_three_segment_parabola( ...
@@ -193,13 +205,33 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
         state.pathBase = pathBase;
         state.T_target_seq = Tseq;
         state.keyPts = keyPts;
+        deepAbs = features.topPoint(3) - keyPts.deep(3);
+        startLift = keyPts.start(3) - features.topPoint(3);
+        finishLift = keyPts.finish(3) - features.topPoint(3);
+        edgeDist = fitInfo.outerOffset;
+        fprintf(['[main.03] preview: deep=%.3fm (bucketDepth=%.3fm), ' ...
+            'startLift=%.3fm finishLift=%.3fm outerOffset=%.3fm, ' ...
+            'slopeMaxAfter=%.3f (<= tan30=%.3f), xAxis=%s\n'], ...
+            deepAbs, features.depth, startLift, finishLift, edgeDist, fitInfo.slopeMaxAfter, tand(30), fitInfo.xAxisSource);
 
         renderBaseScene();
         hold(ax, 'on');
-        plot3(ax, pathBase(:, 1), pathBase(:, 2), pathBase(:, 3), 'r-', 'LineWidth', 2.4);
-        plot3(ax, keyPts.start(1), keyPts.start(2), keyPts.start(3), 'go', 'MarkerSize', 8, 'LineWidth', 1.8);
-        plot3(ax, keyPts.deep(1), keyPts.deep(2), keyPts.deep(3), 'ko', 'MarkerSize', 8, 'LineWidth', 1.8);
-        plot3(ax, keyPts.finish(1), keyPts.finish(2), keyPts.finish(3), 'bo', 'MarkerSize', 8, 'LineWidth', 1.8);
+        % High-contrast preview curve (black base + yellow overlay) for visibility.
+        plot3(ax, pathBase(:, 1), pathBase(:, 2), pathBase(:, 3), '-', ...
+            'Color', [0.05 0.05 0.05], 'LineWidth', 5.0);
+        plot3(ax, pathBase(:, 1), pathBase(:, 2), pathBase(:, 3), '-', ...
+            'Color', [1.0 0.95 0.1], 'LineWidth', 2.6);
+        scatter3(ax, pathBase(1:3:end, 1), pathBase(1:3:end, 2), pathBase(1:3:end, 3), ...
+            22, [1.0 0.95 0.1], 'filled', 'MarkerEdgeColor', [0.1 0.1 0.1]);
+        plot3(ax, keyPts.start(1), keyPts.start(2), keyPts.start(3), 'o', ...
+            'MarkerSize', 10, 'MarkerFaceColor', [0 0.9 0], 'MarkerEdgeColor', [0 0.2 0], 'LineWidth', 1.8);
+        plot3(ax, keyPts.deep(1), keyPts.deep(2), keyPts.deep(3), 'o', ...
+            'MarkerSize', 10, 'MarkerFaceColor', [0.95 0.95 0.95], 'MarkerEdgeColor', [0.05 0.05 0.05], 'LineWidth', 1.8);
+        plot3(ax, keyPts.finish(1), keyPts.finish(2), keyPts.finish(3), 'o', ...
+            'MarkerSize', 10, 'MarkerFaceColor', [0.1 0.6 1], 'MarkerEdgeColor', [0 0.2 0.5], 'LineWidth', 1.8);
+        text(ax, keyPts.start(1), keyPts.start(2), keyPts.start(3)+0.03, 'start', 'Color', [0 0.5 0], 'FontWeight', 'bold');
+        text(ax, keyPts.deep(1), keyPts.deep(2), keyPts.deep(3)+0.03, 'deep', 'Color', [0.1 0.1 0.1], 'FontWeight', 'bold');
+        text(ax, keyPts.finish(1), keyPts.finish(2), keyPts.finish(3)+0.03, 'finish', 'Color', [0 0.3 0.7], 'FontWeight', 'bold');
 
         set(txtStatus, 'String', 'Status: trajectory preview updated', 'ForegroundColor', [0 0.45 0]);
     end
@@ -209,18 +241,25 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
             set(txtStatus, 'String', 'Status: load scene first', 'ForegroundColor', [0.85 0.2 0.1]);
             return;
         end
+        trajParams.targetDeepDepthRatio = 0.15;
 
         set(txtStatus, 'String', 'Status: running planner...', 'ForegroundColor', [0 0.3 0.8]);
         drawnow;
+        fprintf('[main.03] ===== RUN START =====\n');
+        fprintf('[main.03] current qNorm=%.3f\n', norm(state.qCurrent));
 
         if isempty(state.pathBase) || isempty(state.T_target_seq)
+            fprintf('[main.03] no preview cache, building preview first...\n');
             onPreview();
         end
+        fprintf('[main.03] preview points=%d\n', size(state.pathBase, 1));
 
         collisionOpts = struct('segmentSamples', 3, 'pointRadius', 0.018, 'verbose', false);
         collisionFcn = @(q) collision_policy_bucket( ...
             state.robot, q, state.robotInfo.baseFrame, state.bucketModel, collisionOpts);
 
+        set(txtStatus, 'String', 'Status: checking start collision...', 'ForegroundColor', [0 0.3 0.8]);
+        drawnow;
         if collisionFcn(state.qCurrent)
             warning('[main.03] Current pose collides bucket. Falling back to home.');
             state.qCurrent = clamp_to_limits(homeConfiguration(state.robot), state.jointLimits);
@@ -233,10 +272,13 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
         [qEntry, ~] = ikLocal(state.robotInfo.endEffector, state.T_target_seq(:, :, 1), [1 1 1 0.7 0.7 0.7], state.qCurrent);
         qEntry = clamp_to_limits(qEntry, state.jointLimits);
         qEntry = nearest_equivalent_to_ref(qEntry, state.qCurrent, state.jointLimits);
+        fprintf('[main.03] qEntry solved, deltaNorm=%.3f\n', norm(qEntry - state.qCurrent));
 
         plannerOpts = struct('maxIter', 2200, 'goalBias', 0.20, 'stepSize', 0.24, ...
             'nearRadius', 0.65, 'goalThresh', 0.20, 'edgeStep', 0.08, ...
-            'shortcutIters', 100, 'verbose', true);
+            'shortcutIters', 100, 'verbose', true, 'logEvery', 80);
+        set(txtStatus, 'String', 'Status: RRT* approach planning...', 'ForegroundColor', [0 0.3 0.8]);
+        drawnow;
         try
             [qApproach, rrtInfo] = plan_rrtstar_joint_path(state.qCurrent, qEntry, state.jointLimits, collisionFcn, plannerOpts);
             fprintf('[main.03] approach success=%d nodes=%d pathPts=%d\n', ...
@@ -250,40 +292,76 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
             qApproach = [state.qCurrent; qEntry];
         end
 
-        % Keep-complete strategy: if many hold points, rebuild trajectory with reduced depth.
-        adaptiveTraj = trajParams;
+        % Execution-first strategy: iterate presets that progressively relax geometry.
         finalPath = state.pathBase;
         finalTseq = state.T_target_seq;
         dryInfo = struct('nHold', inf);
+        bestScore = inf;
+        bestAttempt = 1;
+        bestMetrics = struct();
+        bestDryInfo = struct('timeoutTriggered', true, 'localRrtFailTotal', inf, ...
+            'nSolved', 0, 'nHold', inf, 'nFallback', inf, 'posErrMax', inf);
         for attempt = 1:4
+            [adaptiveTraj, nPtsTry] = buildExecPriorityAttempt(trajParams, attempt);
+            set(txtStatus, 'String', sprintf('Status: adaptive check %d/4 ...', attempt), 'ForegroundColor', [0 0.3 0.8]);
+            drawnow;
+            fprintf(['[main.03] adaptive check attempt=%d | nPts=%d outerOffset=%.3f liftRatio=%.3f ' ...
+                'targetDeep=%.3f maxCut=%.1f\n'], ...
+                attempt, nPtsTry, adaptiveTraj.topOuterOffsetRatio, adaptiveTraj.startFinishLiftRatio, ...
+                adaptiveTraj.targetDeepDepthRatio, adaptiveTraj.maxCutAngleDeg);
             [pathA, ~, ~, TseqA, ~] = fit_three_segment_parabola( ...
-                state.perception.features, adaptiveTraj, postureParams, nPts);
+                state.perception.features, adaptiveTraj, postureParams, nPtsTry);
             dryOpts = struct( ...
                 'render', false, ...
-                'verbose', false, ...
+                'verbose', true, ...
                 'prefixPath', qApproach, ...
                 'bucketPointCloud', state.bucketPointCloud, ...
                 'desiredPath', pathA, ...
                 'localRrtEnabled', true, ...
-                'localRrtMaxIter', 220);
+                'localRrtMaxIter', 220, ...
+                'maxConsecutiveLocalFail', 6, ...
+                'maxTotalLocalFail', 18, ...
+                'maxRunSeconds', 35, ...
+                'maxIkSeconds', 14, ...
+                'maxConnectSeconds', 20, ...
+                'maxAnimSeconds', 5, ...
+                'maxConsecutiveNoProgress', 10, ...
+                'progressFcn', @onRunProgress);
             [~, dryInfo] = run_ik_and_animation( ...
                 state.robot, state.robotInfo.endEffector, state.robotInfo.baseFrame, TseqA, ...
                 qApproach(end, :), state.jointLimits, collisionFcn, dryOpts);
 
-            fprintf('[main.03] adapt attempt=%d hold=%d fallback=%d posErrMax=%.4f\n', ...
-                attempt, dryInfo.nHold, dryInfo.nFallback, dryInfo.posErrMax);
+            [thisScore, metrics] = scoreAttemptForExecution(dryInfo, nPtsTry);
+            fprintf(['[main.03] adapt attempt=%d solved=%d/%d ratio=%.3f hold=%d fallback=%d ' ...
+                'timeout=%d localFail=%d posErrMax=%.4f score=%.2f\n'], ...
+                attempt, dryInfo.nSolved, nPtsTry, metrics.solveRatio, dryInfo.nHold, dryInfo.nFallback, ...
+                dryInfo.timeoutTriggered, dryInfo.localRrtFailTotal, safeNumber(dryInfo.posErrMax, nan), thisScore);
 
-            finalPath = pathA;
-            finalTseq = TseqA;
-            if dryInfo.nHold <= 2
-                break;
+            if thisScore < bestScore
+                bestScore = thisScore;
+                finalPath = pathA;
+                finalTseq = TseqA;
+                bestAttempt = attempt;
+                bestMetrics = metrics;
+                bestDryInfo = dryInfo;
             end
 
-            adaptiveTraj.entryDepthRatio = max(0.18, 0.93 * adaptiveTraj.entryDepthRatio);
-            adaptiveTraj.deepDepthRatio = max(0.35, 0.90 * adaptiveTraj.deepDepthRatio);
-            adaptiveTraj.exitDepthRatio = max(0.08, 0.92 * adaptiveTraj.exitDepthRatio);
-            adaptiveTraj.entryLift = adaptiveTraj.entryLift + 0.01;
+            if (dryInfo.nHold <= 2) && (~dryInfo.timeoutTriggered)
+                break;
+            end
         end
+        fprintf(['[main.03] selected attempt=%d score=%.2f solvedRatio=%.3f hold=%d fallback=%d ' ...
+            'timeout=%d localFail=%d\n'], ...
+            bestAttempt, bestScore, safeNumber(bestMetrics.solveRatio, 0), ...
+            safeNumber(bestDryInfo.nHold, -1), safeNumber(bestDryInfo.nFallback, -1), ...
+            safeNumber(bestDryInfo.timeoutTriggered, 1), safeNumber(bestDryInfo.localRrtFailTotal, -1));
+
+        enableLocalRrtFinal = true;
+        if bestDryInfo.timeoutTriggered || (safeNumber(bestDryInfo.localRrtFailTotal, 0) >= 8)
+            enableLocalRrtFinal = false;
+        end
+        fprintf('[main.03] final policy: localRRT=%d (dryTimeout=%d localFail=%d)\n', ...
+            enableLocalRrtFinal, safeNumber(bestDryInfo.timeoutTriggered, 0), safeNumber(bestDryInfo.localRrtFailTotal, 0));
 
         runOpts = struct( ...
             'render', true, ...
@@ -293,8 +371,19 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
             'prefixPath', qApproach, ...
             'bucketPointCloud', state.bucketPointCloud, ...
             'desiredPath', finalPath, ...
-            'localRrtEnabled', true, ...
-            'localRrtMaxIter', 280);
+            'localRrtEnabled', enableLocalRrtFinal, ...
+            'localRrtMaxIter', 280, ...
+            'maxConsecutiveLocalFail', 8, ...
+            'maxTotalLocalFail', 30, ...
+            'maxRunSeconds', 90, ...
+            'maxIkSeconds', 35, ...
+            'maxConnectSeconds', 95, ...
+            'maxAnimSeconds', 180, ...
+            'maxConsecutiveNoProgress', 18, ...
+            'progressFcn', @onRunProgress);
+        set(txtStatus, 'String', 'Status: executing IK + animation...', 'ForegroundColor', [0 0.3 0.8]);
+        drawnow;
+        fprintf('[main.03] execution begin, approachPts=%d targetPts=%d\n', size(qApproach,1), size(finalTseq,3));
         [qExec, runInfo] = run_ik_and_animation( ...
             state.robot, state.robotInfo.endEffector, state.robotInfo.baseFrame, finalTseq, ...
             qApproach(end, :), state.jointLimits, collisionFcn, runOpts);
@@ -303,8 +392,37 @@ txtLog = uicontrol('Parent', fig, 'Style', 'text', 'Units', 'normalized', ...
         state.pathBase = finalPath;
         state.T_target_seq = finalTseq;
 
-        set(txtStatus, 'String', sprintf('Status: done (hold=%d fallback=%d)', runInfo.nHold, runInfo.nFallback), ...
-            'ForegroundColor', [0 0.45 0]);
+        if runInfo.timeoutTriggered
+            stopStage = 'unknown';
+            if isfield(runInfo, 'timeoutStage') && ~isempty(runInfo.timeoutStage)
+                stopStage = runInfo.timeoutStage;
+            end
+            set(txtStatus, 'String', sprintf('Status: timeout stop[%s] (hold=%d, solved=%d)', stopStage, runInfo.nHold, runInfo.nSolved), ...
+                'ForegroundColor', [0.85 0.35 0.0]);
+        else
+            set(txtStatus, 'String', sprintf('Status: done (hold=%d fallback=%d)', runInfo.nHold, runInfo.nFallback), ...
+                'ForegroundColor', [0 0.45 0]);
+        end
+        fprintf('[main.03] ===== RUN DONE ===== hold=%d fallback=%d execPts=%d\n', ...
+            runInfo.nHold, runInfo.nFallback, runInfo.nExecuted);
+    end
+
+    function onRunProgress(s)
+        if ~isstruct(s) || ~isfield(s, 'message')
+            return;
+        end
+        stage = '';
+        if isfield(s, 'stage')
+            stage = string(s.stage);
+        end
+        if stage == "timeout"
+            set(txtStatus, 'String', ['Status: ', char(s.message)], 'ForegroundColor', [0.90 0.25 0.10]);
+        elseif stage == "local_rrt_disabled"
+            set(txtStatus, 'String', ['Status: ', char(s.message)], 'ForegroundColor', [0.85 0.45 0.05]);
+        else
+            set(txtStatus, 'String', ['Status: ', char(s.message)], 'ForegroundColor', [0 0.3 0.8]);
+        end
+        drawnow limitrate;
     end
 
     function renderBaseScene()
@@ -368,4 +486,82 @@ out.valueText = uicontrol('Parent', parentFig, 'Style', 'text', 'Units', 'normal
         out.valueText.String = sprintf('%.3f', val);
         cb(val);
     end
+end
+
+function [p, nPtsTry] = buildExecPriorityAttempt(baseParams, attempt)
+% buildExecPriorityAttempt:
+% Attempt presets ordered from strict geometry to execution-priority.
+
+p = baseParams;
+nPtsTry = 90;
+
+switch attempt
+    case 1
+        p.execFirstMode = true;
+        p.forceBaseXDir = true;
+        p.maxCutAngleDeg = 30;
+        nPtsTry = 90;
+    case 2
+        p.execFirstMode = true;
+        p.forceBaseXDir = true;
+        p.maxCutAngleDeg = 26;
+        p.topOuterOffsetRatio = 0.08;
+        p.startFinishLiftRatio = 0.22;
+        p.midSlopeAtKnot1 = -0.16;
+        nPtsTry = 80;
+    case 3
+        p.execFirstMode = true;
+        p.forceBaseXDir = true;
+        p.maxCutAngleDeg = 22;
+        p.topOuterOffsetRatio = 0.04;
+        p.startFinishLiftRatio = 0.18;
+        p.targetDeepDepthRatio = 0.13;
+        p.midSlopeAtKnot1 = -0.12;
+        nPtsTry = 70;
+    otherwise
+        p.execFirstMode = true;
+        p.forceBaseXDir = true;
+        p.maxCutAngleDeg = 18;
+        p.topOuterOffsetRatio = 0.00;
+        p.startFinishLiftRatio = 0.14;
+        p.targetDeepDepthRatio = 0.10;
+        p.midSlopeAtKnot1 = -0.08;
+        p.entryDepthRatio = min(p.entryDepthRatio, 0.18);
+        p.exitDepthRatio = min(p.exitDepthRatio, 0.12);
+        nPtsTry = 60;
+end
+end
+
+function v = safeNumber(x, fallback)
+if isempty(x) || ~isfinite(x)
+    v = fallback;
+else
+    v = x;
+end
+end
+
+function [score, metrics] = scoreAttemptForExecution(dryInfo, nPtsTry)
+nPtsTry = max(1, nPtsTry);
+solveRatio = safeNumber(dryInfo.nSolved, 0) / nPtsTry;
+solveRatio = min(max(solveRatio, 0), 1);
+timeoutPenalty = 0;
+if isfield(dryInfo, 'timeoutTriggered') && dryInfo.timeoutTriggered
+    timeoutPenalty = 250;
+end
+holdN = safeNumber(dryInfo.nHold, nPtsTry);
+fallbackN = safeNumber(dryInfo.nFallback, nPtsTry);
+localFail = safeNumber(dryInfo.localRrtFailTotal, 0);
+posErr = safeNumber(dryInfo.posErrMax, 0.6);
+
+% Execution-first scoring: prefer higher solved ratio and stable connect behavior.
+score = timeoutPenalty ...
+    + (1 - solveRatio) * 180 ...
+    + holdN * 18 ...
+    + fallbackN * 1.2 ...
+    + localFail * 0.8 ...
+    + posErr * 8;
+
+metrics = struct();
+metrics.solveRatio = solveRatio;
+metrics.timeoutPenalty = timeoutPenalty;
 end

@@ -82,8 +82,9 @@ for i = 1:nBodies
     bodyNames{end + 1, 1} = childName; %#ok<AGROW>
 
     bodyObj = getBody(robot, childName);
-    parentName = bodyObj.Parent;
-    if isempty(parentName) || strcmp(parentName, robot.BaseName)
+    parentRef = bodyObj.Parent;
+    parentName = normalizeParentName(parentRef);
+    if isempty(parentName) || strcmp(parentName, char(robot.BaseName))
         continue;
     end
 
@@ -95,6 +96,38 @@ for i = 1:nBodies
         pts = [pts; p]; %#ok<AGROW>
         bodyNames{end + 1, 1} = childName; %#ok<AGROW>
     end
+end
+end
+
+function parentName = normalizeParentName(parentRef)
+% normalizeParentName:
+% Compatible with different MATLAB releases where Parent may be
+% char/string/rigidBody.
+
+parentName = '';
+if isempty(parentRef)
+    return;
+end
+
+if isa(parentRef, 'rigidBody')
+    parentName = char(parentRef.Name);
+    return;
+end
+if isstring(parentRef)
+    if strlength(parentRef) > 0
+        parentName = char(parentRef);
+    end
+    return;
+end
+if ischar(parentRef)
+    parentName = parentRef;
+    return;
+end
+
+try
+    parentName = char(parentRef);
+catch
+    parentName = '';
 end
 end
 

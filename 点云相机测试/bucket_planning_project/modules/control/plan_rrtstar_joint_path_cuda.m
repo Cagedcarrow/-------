@@ -1,6 +1,10 @@
-function [qPath, info] = plan_rrtstar_joint_path(qStart, qGoal, jointLimits, collisionFcn, opts)
-% plan_rrtstar_joint_path:
-% Joint-space RRT* planner with collision checks.
+function [qPath, info] = plan_rrtstar_joint_path_cuda(qStart, qGoal, jointLimits, collisionFcn, opts)
+% plan_rrtstar_joint_path_cuda:
+% RRT* planner with optional CUDA acceleration for NN/radius queries.
+%
+% Notes:
+%   - Collision checks remain on CPU.
+%   - GPU is used only for distance-heavy operations.
 
 if nargin < 5
     opts = struct();
@@ -14,24 +18,34 @@ if ~isfield(opts, 'edgeStep'), opts.edgeStep = 0.08; end
 if ~isfield(opts, 'shortcutIters'), opts.shortcutIters = 100; end
 if ~isfield(opts, 'verbose'), opts.verbose = true; end
 if ~isfield(opts, 'logEvery'), opts.logEvery = 100; end
+if ~isfield(opts, 'useGPU'), opts.useGPU = true; end
+if ~isfield(opts, 'forceGPU'), opts.forceGPU = false; end
 
 qStart = clamp_to_limits(qStart, jointLimits);
 qGoal = clamp_to_limits(qGoal, jointLimits);
 
 if collisionFcn(qStart)
-    error('[control.rrtstar] qStart is colliding.');
+    error('[control.rrtstar_cuda] qStart is colliding.');
 end
 if collisionFcn(qGoal)
-    error('[control.rrtstar] qGoal is colliding.');
+    error('[control.rrtstar_cuda] qGoal is colliding.');
 end
+
+gpuState = initGpuState(opts);
 
 nJ = numel(qStart);
 nodes = struct('q', qStart, 'parent', 0, 'cost', 0);
 goalNodeIdx = 0;
 
 if opts.verbose
-    fprintf('[control.rrtstar] start nJ=%d maxIter=%d step=%.3f goalBias=%.2f nearR=%.2f thresh=%.2f\n', ...
-        nJ, opts.maxIter, opts.stepSize, opts.goalBias, opts.nearRadius, opts.goalThresh);
+    fprintf(['[control.rrtstar_cuda] start nJ=%d maxIter=%d step=%.3f goalBias=%.2f ' ...
+        'nearR=%.2f thresh=%.2f gpu=%d\n'], ...
+        nJ, opts.maxIter, opts.stepSize, opts.goalBias, opts.nearRadius, opts.goalThresh, gpuState.enabled);
+    if gpuState.enabled
+        fprintf('[control.rrtstar_cuda] CUDA device: %s\n', gpuState.name);
+    else
+        fprintf('[control.rrtstar_cuda] GPU fallback CPU: %s\n', gpuState.reason);
+    end
 end
 
 for it = 1:opts.maxIter
@@ -41,14 +55,14 @@ for it = 1:opts.maxIter
         qRand = sampleInLimits(jointLimits);
     end
 
-    [idxNear, qNear] = nearestNode(nodes, qRand);
+    [idxNear, qNear] = nearestNodeAccel(nodes, qRand, gpuState);
     qNew = steer(qNear, qRand, opts.stepSize, jointLimits);
 
     if ~edgeCollisionFree(qNear, qNew, opts.edgeStep, collisionFcn)
         continue;
     end
 
-    nearIdx = radiusNeighbors(nodes, qNew, opts.nearRadius);
+    nearIdx = radiusNeighborsAccel(nodes, qNew, opts.nearRadius, gpuState);
     parentIdx = idxNear;
     minCost = nodes(idxNear).cost + norm(qNew - qNear);
 
@@ -68,7 +82,6 @@ for it = 1:opts.maxIter
     nodes(end + 1) = newNode; %#ok<AGROW>
     idxNew = numel(nodes);
 
-    % Rewire.
     for k = 1:numel(nearIdx)
         idx = nearIdx(k);
         if idx == parentIdx
@@ -83,23 +96,23 @@ for it = 1:opts.maxIter
     end
 
     if norm(qNew - qGoal) <= opts.goalThresh && edgeCollisionFree(qNew, qGoal, opts.edgeStep, collisionFcn)
-        goalNodeStruct = struct();
-        goalNodeStruct.q = qGoal;
-        goalNodeStruct.parent = idxNew;
-        goalNodeStruct.cost = nodes(idxNew).cost + norm(qGoal - qNew);
-        nodes(end + 1) = goalNodeStruct; %#ok<AGROW>
+        goalNode = struct();
+        goalNode.q = qGoal;
+        goalNode.parent = idxNew;
+        goalNode.cost = nodes(idxNew).cost + norm(qGoal - qNew);
+        nodes(end + 1) = goalNode; %#ok<AGROW>
         goalNodeIdx = numel(nodes);
         if opts.verbose
-            fprintf('[control.rrtstar] Goal reached at iter=%d nodes=%d cost=%.3f\n', ...
+            fprintf('[control.rrtstar_cuda] Goal reached at iter=%d nodes=%d cost=%.3f\n', ...
                 it, numel(nodes), nodes(goalNodeIdx).cost);
         end
         break;
     end
 
     if opts.verbose && mod(it, max(1, opts.logEvery)) == 0
-        [~, dNearGoal] = nearestNode(nodes, qGoal);
-        fprintf('[control.rrtstar] iter=%d nodes=%d nearGoalDist=%.3f\n', ...
-            it, numel(nodes), norm(dNearGoal - qGoal));
+        [~, qNearGoal] = nearestNodeAccel(nodes, qGoal, gpuState);
+        fprintf('[control.rrtstar_cuda] iter=%d nodes=%d nearGoalDist=%.3f\n', ...
+            it, numel(nodes), norm(qNearGoal - qGoal));
     end
 end
 
@@ -107,15 +120,16 @@ info = struct();
 info.success = (goalNodeIdx ~= 0);
 info.numNodes = numel(nodes);
 info.maxIter = opts.maxIter;
+info.gpu = gpuState;
 
 if goalNodeIdx == 0
-    [idxBest, qBest] = nearestNode(nodes, qGoal);
+    [idxBest, qBest] = nearestNodeAccel(nodes, qGoal, gpuState);
     if ~edgeCollisionFree(qBest, qGoal, opts.edgeStep, collisionFcn)
         qPath = qStart;
         info.message = 'RRT* failed to connect goal and fallback edge collides.';
         info.bestNode = idxBest;
         if opts.verbose
-            fprintf('[control.rrtstar] failed: nearest fallback edge collides (idxBest=%d)\n', idxBest);
+            fprintf('[control.rrtstar_cuda] failed: nearest fallback edge collides (idxBest=%d)\n', idxBest);
         end
         return;
     end
@@ -132,8 +146,56 @@ qPath = shortcutPath(qPath, opts.shortcutIters, opts.edgeStep, collisionFcn);
 info.pathLength = pathLength(qPath);
 info.numPathPoints = size(qPath, 1);
 if opts.verbose
-    fprintf('[control.rrtstar] done success=%d nodes=%d pathPts=%d pathLen=%.3f\n', ...
-        info.success, info.numNodes, info.numPathPoints, info.pathLength);
+    fprintf('[control.rrtstar_cuda] done success=%d nodes=%d pathPts=%d pathLen=%.3f gpu=%d\n', ...
+        info.success, info.numNodes, info.numPathPoints, info.pathLength, gpuState.enabled);
+end
+end
+
+function gpuState = initGpuState(opts)
+gpuState = struct('enabled', false, 'name', '', 'reason', 'gpu disabled by opts', ...
+    'requested', opts.useGPU, 'force', opts.forceGPU);
+
+if ~opts.useGPU
+    return;
+end
+
+if exist('gpuDeviceCount', 'file') ~= 2 || exist('gpuDevice', 'file') ~= 2
+    gpuState.reason = 'Parallel Computing Toolbox / GPU functions unavailable';
+    if opts.forceGPU
+        error('[control.rrtstar_cuda] forceGPU=true but GPU toolbox unavailable.');
+    end
+    return;
+end
+
+count = 0;
+try
+    count = gpuDeviceCount("available");
+catch
+    try
+        count = gpuDeviceCount;
+    catch
+        count = 0;
+    end
+end
+
+if count < 1
+    gpuState.reason = 'No CUDA GPU detected';
+    if opts.forceGPU
+        error('[control.rrtstar_cuda] forceGPU=true but no CUDA GPU detected.');
+    end
+    return;
+end
+
+try
+    g = gpuDevice;
+    gpuState.enabled = true;
+    gpuState.name = g.Name;
+    gpuState.reason = 'ok';
+catch ME
+    gpuState.reason = sprintf('gpuDevice init failed: %s', ME.message);
+    if opts.forceGPU
+        error('[control.rrtstar_cuda] forceGPU=true but gpuDevice failed: %s', ME.message);
+    end
 end
 end
 
@@ -141,18 +203,35 @@ function q = sampleInLimits(lim)
 q = lim(:, 1)' + rand(1, size(lim, 1)) .* (lim(:, 2)' - lim(:, 1)');
 end
 
-function [idx, qNear] = nearestNode(nodes, q)
+function [idx, qNear] = nearestNodeAccel(nodes, q, gpuState)
 allQ = vertcat(nodes.q);
-[~, idx] = min(sum((allQ - q).^2, 2));
+if gpuState.enabled
+    qGpu = gpuArray(single(q));
+    allQGpu = gpuArray(single(allQ));
+    d2 = sum((allQGpu - qGpu).^2, 2);
+    [~, idxGpu] = min(d2);
+    idx = gather(idxGpu);
+else
+    [~, idx] = min(sum((allQ - q).^2, 2));
+end
 qNear = nodes(idx).q;
 end
 
-function idx = radiusNeighbors(nodes, q, r)
+function idx = radiusNeighborsAccel(nodes, q, r, gpuState)
 allQ = vertcat(nodes.q);
-d = sqrt(sum((allQ - q).^2, 2));
-idx = find(d <= r);
+r2 = r * r;
+if gpuState.enabled
+    qGpu = gpuArray(single(q));
+    allQGpu = gpuArray(single(allQ));
+    d2 = sum((allQGpu - qGpu).^2, 2);
+    mask = gather(d2 <= single(r2));
+    idx = find(mask);
+else
+    d2 = sum((allQ - q).^2, 2);
+    idx = find(d2 <= r2);
+end
 if isempty(idx)
-    [idx, ~] = nearestNode(nodes, q); %#ok<ASGLU>
+    [idx, ~] = nearestNodeAccel(nodes, q, gpuState); %#ok<ASGLU>
 end
 end
 

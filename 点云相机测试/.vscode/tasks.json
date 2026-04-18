@@ -1,0 +1,26 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "MATLAB Batch",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "$env:PATH = ($env:PATH -split ';' | Where-Object {$_ -notlike '*matlab2026*'}) -join ';'; & 'E:\\matlab2025b\\bin\\matlab.exe' -batch '${input:matlabCommand}'"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "matlabCommand",
+            "type": "promptString",
+            "description": "Enter MATLAB command to execute"
+        }
+    ]
+}
